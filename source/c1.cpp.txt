@@ -1,0 +1,105 @@
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <MQTTClient.h>
+#include <nlohmann/json.hpp>
+#include <cstdlib>
+
+#define ADDRESS "tcp://57.128.199.252:1883"
+#define USER "mqttuser"
+#define HASLO "baniaUCygana2137."
+
+float losuj(float min, float max)
+{
+    return min + static_cast<float>(rand()) / RAND_MAX * (max - min);
+}
+
+void task_c1_sender()
+{
+    MQTTClient client;
+    MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
+
+    MQTTClient_create(&client, ADDRESS, "C1_simulator",
+        MQTTCLIENT_PERSISTENCE_NONE, NULL);
+
+    conn_opts.username = USER;
+    conn_opts.password = HASLO;
+
+    if (MQTTClient_connect(client, &conn_opts) != MQTTCLIENT_SUCCESS)
+    {
+        std::cout << "C1 connection failed\n";
+        return;
+    }
+
+    std::cout << "C1 connected\n";
+
+    int counter = 0;
+    int counter_in_batch = 0;
+
+    auto last_batch_end = std::chrono::steady_clock::now();
+    bool sending_batch = true;
+
+    while (true)
+    {
+        auto now = std::chrono::steady_clock::now();
+
+        if (sending_batch)
+        {
+            if (counter_in_batch < 50)
+            {
+                counter++;
+
+                nlohmann::json j;
+                j["nr_probki"] = counter;
+                j["temp"] = losuj(15, 30);
+                j["wind"] = losuj(0, 15);
+                j["sunny"] = rand() % 2;
+
+                std::string payload = j.dump();
+
+                MQTTClient_message msg = MQTTClient_message_initializer;
+                msg.payload = (void*)payload.c_str();
+                msg.payloadlen = payload.length();
+                msg.qos = 1;
+
+                MQTTClient_deliveryToken token;
+                MQTTClient_publishMessage(client, "C1/weather", &msg, &token);
+                MQTTClient_waitForCompletion(client, token, 1000);
+
+                std::cout << "C1: " << payload << std::endl;
+
+                counter_in_batch++;
+
+                // szybkie wysyłanie (symulacja sensora)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            else
+            {
+                std::cout << "=== KONIEC PACZKI ===\n";
+
+                sending_batch = false;
+                last_batch_end = now;
+                counter_in_batch = 0;
+            }
+        }
+        else
+        {
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_batch_end).count();
+
+            if (elapsed >= 10)
+            {
+                std::cout << "=== NOWA PACZKA ===\n";
+                sending_batch = true;
+            }
+
+            std::this_thread::yield(); // oddaj CPU
+        }
+    }
+}
+
+int main()
+{
+    std::thread t(task_c1_sender);
+    t.join();
+    return 0;
+}

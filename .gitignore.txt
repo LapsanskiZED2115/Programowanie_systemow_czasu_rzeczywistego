@@ -1,0 +1,6 @@
+weather.db
+weather.db-journal
+weather.db-wal
+log.txt
+c2
+*.o
